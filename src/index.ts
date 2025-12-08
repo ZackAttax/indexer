@@ -1,3 +1,4 @@
+/// <reference types="bun" />
 import "./config";
 import type { EventKey } from "./_shared/eventKey";
 import { logger } from "./_shared/logger";
@@ -30,6 +31,16 @@ if (!chainId) {
 }
 
 const dao = DAO.create(process.env.PG_CONNECTION_STRING!, chainId);
+
+// Start HTTP server for Cloud Run health checks
+const port = parseInt(process.env.PORT || "8080", 10);
+const server = Bun.serve({
+  port,
+  fetch(req) {
+    return new Response("OK", { status: 200 });
+  },
+});
+logger.info({ message: `Health check server listening on port ${port}` });
 
 // Timer for exiting if no blocks are received within the configured time
 const NO_BLOCKS_TIMEOUT_MS = parseInt(process.env.NO_BLOCKS_TIMEOUT_MS || "0");
@@ -440,7 +451,7 @@ function resetNoBlocksTimer() {
       }
 
       default: {
-        const unexpectedMessage: never = message;
+        const unexpectedMessage = message as never;
         logger.error("Unhandled message type", unexpectedMessage);
         break;
       }
