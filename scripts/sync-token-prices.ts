@@ -1,12 +1,51 @@
 import "../src/config";
 import postgres, { type Sql } from "postgres";
 
-const sql = postgres(process.env.PG_CONNECTION_STRING, {
+const sql = postgres(process.env.PG_CONNECTION_STRING!, {
   connect_timeout: 5,
   types: { bigint: postgres.BigInt },
+  connection: {
+    application_name: `sync-token-prices.ts`,
+  },
 });
 
+const DEFAULT_SYNC_INTERVAL_MS = 60_000;
+
 type AddressPriceMap = Record<`0x${string}` | string, number>;
+
+type TokenRow = {
+  token_address: string;
+  token_decimals: number;
+  token_symbol: string;
+};
+
+const QUOTE_USD_AMOUNT = 1000n;
+const EKUBO_QUOTER_BASE_URL =
+  process.env.EKUBO_QUOTER_URL ?? "https://prod-api-quoter.ekubo.org";
+
+const QUOTE_TOKEN_BY_CHAIN_ID: Record<
+  string,
+  { address: `0x${string}`; decimals: number }
+> = {
+  ["1"]: {
+    address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    decimals: 6,
+  },
+  ["11155111"]: {
+    address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    decimals: 6,
+  },
+  ["23448594291968334"]: {
+    address:
+      "0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb",
+    decimals: 6,
+  },
+  ["23448594291968335"]: {
+    address:
+      "0x053b40a647cedfca6ca84f542a0fe36736031905a9639a7f19a3c1e66bfd5080",
+    decimals: 6,
+  },
+};
 
 interface PriceFetcher {
   (sql: Sql<{ bigint: bigint }>, chainId: bigint):
@@ -106,6 +145,133 @@ const ekuboUsdOraclePriceFetcher: PriceFetcher = async (sql, chainId) => {
   }, {});
 };
 
+type EkuboQuoteResponse = { total_calculated: string; price_impact?: number };
+
+function toHexAddress(address: string): `0x${string}` {
+  return `0x${BigInt(address).toString(16)}`;
+}
+
+function quoteAmountInUnits(decimals: number): bigint {
+  return QUOTE_USD_AMOUNT * 10n ** BigInt(decimals);
+}
+
+async function fetchTokensWithTvl(
+  sql: Sql<{ bigint: bigint }>,
+  chainId: bigint
+): Promise<TokenRow[]> {
+  return sql<TokenRow[]>`
+    SELECT t.token_address::text, t.token_decimals, t.token_symbol
+    FROM erc20_tokens t
+    WHERE t.chain_id = ${chainId}
+      AND t.visibility_priority >= 0
+      AND EXISTS (
+        SELECT 1
+        FROM pool_keys pk
+        JOIN pool_tvl pt ON pt.pool_key_id = pk.pool_key_id
+        WHERE pk.chain_id = t.chain_id
+          AND (
+            (pk.token0 = t.token_address AND pt.balance0 > 0)
+            OR (pk.token1 = t.token_address AND pt.balance1 > 0)
+          )
+      )
+  `;
+}
+
+async function fetchEkuboQuoterPrice({
+  chainId,
+  token,
+  quoteToken,
+}: {
+  chainId: bigint;
+  token: TokenRow;
+  quoteToken: { address: `0x${string}`; decimals: number };
+}): Promise<[`0x${string}`, number] | null> {
+  const amountOut = quoteAmountInUnits(quoteToken.decimals);
+  const tokenAddressHex = toHexAddress(token.token_address);
+  const url = `${EKUBO_QUOTER_BASE_URL}/${chainId.toString()}/${
+    chainId === 1n ? "v2/" : ""
+  }${-amountOut}/${quoteToken.address}/${tokenAddressHex}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "omit",
+      headers: { Accept: "application/json" },
+      referrer: "https://ekubo.org/",
+    });
+
+    if (!response.ok) {
+      try {
+        const result = await response.json();
+        console.warn(`Quoter request failed for ${token.token_symbol}: ${url}`);
+      } catch (e) {
+        console.warn(
+          `Quoter request failed for ${token.token_symbol} ${response.status} (${response.statusText}): ${url}`
+        );
+      }
+      return null;
+    }
+
+    const quote = (await response.json()) as EkuboQuoteResponse;
+    const amountInRaw = BigInt(quote.total_calculated);
+    const tokenAmountIn = amountInRaw >= 0 ? amountInRaw : amountInRaw * -1n;
+
+    if (tokenAmountIn === 0n) return null;
+
+    const tokenAmount =
+      Number(tokenAmountIn) / 10 ** Number(token.token_decimals);
+    const priceImpact = Math.max(0, quote.price_impact ?? 0);
+
+    if (!Number.isFinite(tokenAmount) || tokenAmount === 0) return null;
+    if (!Number.isFinite(priceImpact)) return null;
+
+    const basePrice = Number(QUOTE_USD_AMOUNT) / tokenAmount;
+    const adjustedPrice = basePrice * (1 - priceImpact);
+
+    if (!Number.isFinite(adjustedPrice) || adjustedPrice <= 0) return null;
+
+    return [tokenAddressHex, adjustedPrice];
+  } catch (error) {
+    console.debug(
+      `Failed to quote price for ${token.token_symbol} on chain ${chainId}`
+    );
+    return null;
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const ekuboQuoterPriceFetcher: PriceFetcher = async (sql, chainId) => {
+  const chainKey = chainId.toString();
+  const quoteToken = QUOTE_TOKEN_BY_CHAIN_ID[chainKey];
+  if (!quoteToken) return {};
+
+  const tokens = await fetchTokensWithTvl(sql, chainId);
+
+  const result: AddressPriceMap = {};
+
+  for (const token of tokens) {
+    const priced = await fetchEkuboQuoterPrice({
+      chainId,
+      token,
+      quoteToken,
+    });
+
+    await sleep(1_000);
+    if (!priced) continue;
+    const [address, price] = priced;
+    result[address] = price;
+  }
+
+  return result;
+};
+
+const quoterPriceFetcher: PriceFetcherConfig = {
+  source: "qp1",
+  fetch: ekuboQuoterPriceFetcher,
+};
 const oracleV1PriceFetcher: PriceFetcherConfig = {
   source: "ov1",
   fetch: ekuboUsdOraclePriceFetcher,
@@ -118,13 +284,13 @@ const sushiswapPriceFetcher: PriceFetcherConfig = {
 
 const FETCHER_BY_CHAIN_ID: { [chainId: string]: PriceFetcherConfig[] } = {
   // eth mainnet
-  ["1"]: [oracleV1PriceFetcher, sushiswapPriceFetcher],
+  ["1"]: [quoterPriceFetcher, /*oracleV1PriceFetcher,*/ sushiswapPriceFetcher],
   // eth sepolia
-  ["11155111"]: [oracleV1PriceFetcher, sushiswapPriceFetcher],
+  ["11155111"]: [sushiswapPriceFetcher],
   // starknet mainnet
-  ["23448594291968334"]: [oracleV1PriceFetcher],
+  ["23448594291968334"]: [quoterPriceFetcher /*,oracleV1PriceFetcher*/],
   // starknet sepolia
-  ["23448594291968335"]: [oracleV1PriceFetcher],
+  ["23448594291968335"]: [],
 };
 
 function normalizeMapKeys(apm: AddressPriceMap): AddressPriceMap {
@@ -136,7 +302,22 @@ function normalizeMapKeys(apm: AddressPriceMap): AddressPriceMap {
   );
 }
 
-async function main() {
+function getSyncInterval(): number {
+  const envValue = process.env.TOKEN_PRICE_SYNC_INTERVAL_MS;
+  if (envValue === undefined) return DEFAULT_SYNC_INTERVAL_MS;
+
+  const parsed = Number(envValue);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid TOKEN_PRICE_SYNC_INTERVAL_MS value "${envValue}", expected a positive integer (milliseconds)`
+    );
+  }
+
+  return parsed;
+}
+
+async function syncTokenPrices(sql: Sql<{ bigint: bigint }>) {
   await sql.begin(async (sql) => {
     for (const [chainId, fetchers] of Object.entries(FETCHER_BY_CHAIN_ID)) {
       const priceRows: [
@@ -199,9 +380,62 @@ async function main() {
   });
 }
 
-main()
-  .catch((error) => {
-    console.error("Token price sync failed", error);
+async function main() {
+  const intervalMs = getSyncInterval();
+  let isRunning = false;
+
+  console.log(
+    `Starting token price sync worker (interval ${intervalMs.toLocaleString()} ms)`
+  );
+
+  const runSync = async () => {
+    if (isRunning) {
+      console.warn(
+        "Previous token price sync still running; skipping this interval"
+      );
+      return;
+    }
+
+    isRunning = true;
+    const startedAt = Date.now();
+
+    try {
+      await syncTokenPrices(sql);
+      console.log(
+        `Token price sync completed in ${Math.round(Date.now() - startedAt)} ms`
+      );
+    } catch (error) {
+      console.error("Token price sync failed", error);
+      process.exit(1);
+    } finally {
+      isRunning = false;
+    }
+  };
+
+  const interval = setInterval(runSync, intervalMs);
+
+  const shutdown = async () => {
+    clearInterval(interval);
+    try {
+      await sql.end({ timeout: 5 });
+    } catch (error) {
+      console.warn("Failed to close SQL pool cleanly", error);
+    } finally {
+      process.exit(0);
+    }
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  await runSync();
+}
+
+main().catch(async (error) => {
+  console.error("Token price sync worker failed to start", error);
+  try {
+    await sql.end({ timeout: 5 });
+  } finally {
     process.exit(1);
-  })
-  .finally(() => sql.end({ timeout: 5 }));
+  }
+});

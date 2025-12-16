@@ -45,6 +45,10 @@ workers:
       - key: NETWORK_TYPE
         scope: RUN_TIME
         value: starknet
+      - key: APIBARA_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${STARKNET_MAINNET_APIBARA_URL}
       - key: NETWORK
         scope: RUN_TIME
         value: mainnet
@@ -69,10 +73,23 @@ workers:
       - key: NETWORK_TYPE
         scope: RUN_TIME
         value: evm
+      - key: APIBARA_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${ETH_MAINNET_APIBARA_URL}
       - key: NETWORK
         scope: RUN_TIME
         value: mainnet
     run_command: bun src/index.ts
+  - name: token-price-sync
+    image: *indexer-image
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+    envs:
+      - key: TOKEN_PRICE_SYNC_INTERVAL_MS
+        scope: RUN_TIME
+        value: "60000"
+    run_command: bun scripts/sync-token-prices.ts
 jobs:
   - name: run-migrations
     kind: PRE_DEPLOY
@@ -88,13 +105,5 @@ jobs:
     instance_size_slug: apps-s-1vcpu-0.5gb
     instance_count: 1
     run_command: bun scripts/sync-tokens.ts
-  - name: sync-token-prices
-    kind: SCHEDULED
-    schedule:
-      cron: "*/15 * * * *"
-    image: *indexer-image
-    instance_size_slug: apps-s-1vcpu-0.5gb
-    instance_count: 1
-    run_command: bun scripts/sync-token-prices.ts
 vpc:
   id: ${VPC_ID}
