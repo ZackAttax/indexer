@@ -8,6 +8,7 @@ interface CommonConfiguration {
 
   DNA_TOKEN: string;
   APIBARA_URL: string;
+  STARKNET_PRIVATE_NODE_URL?: string; // Optional private node URL for Starknet streams, falls back to APIBARA_URL if not set
   PG_CONNECTION_STRING: string;
 
   NO_BLOCKS_TIMEOUT_MS: string; // Time in milliseconds before exiting if no blocks are received

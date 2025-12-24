@@ -226,7 +226,7 @@ function resetNoBlocksTimer() {
             },
           },
         })
-      : createClient(StarknetStream, process.env.APIBARA_URL!, {
+      : createClient(StarknetStream, process.env.STARKNET_PRIVATE_NODE_URL || process.env.APIBARA_URL!, {
           defaultCallOptions: {
             "*": {
               metadata: Metadata({
