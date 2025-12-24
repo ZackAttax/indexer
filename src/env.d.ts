@@ -8,6 +8,7 @@ interface CommonConfiguration {
 
   DNA_TOKEN: string;
   APIBARA_URL: string;
+  STARKNET_PRIVATE_NODE_URL?: string; // Optional private node URL for Starknet (defaults to APIBARA_URL if not set)
   PG_CONNECTION_STRING: string;
 
   NO_BLOCKS_TIMEOUT_MS: string; // Time in milliseconds before exiting if no blocks are received
@@ -35,6 +36,8 @@ interface EvmConfig extends CommonConfiguration {
   INCENTIVES_V2_ADDRESS: `0x${string}`;
   MEV_CAPTURE_V2_ADDRESS: `0x${string}`;
   TOKEN_WRAPPER_FACTORY_V2_ADDRESS: `0x${string}`;
+
+  EVM_RPC_URL?: string; // Optional RPC URL for EVM networks (used instead of Apibara stream when provided)
 }
 
 interface StarknetConfig extends CommonConfiguration {

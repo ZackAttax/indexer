@@ -264,26 +264,34 @@ function resetNoBlocksTimer() {
               },
             ],
           })
-      : createClient(StarknetStream, process.env.APIBARA_URL!, {
-          defaultCallOptions: {
-            "*": {
-              metadata: Metadata({
-                Authorization: `Bearer ${process.env.DNA_TOKEN}`,
-              }),
+      : (() => {
+          const starknetStreamUrl =
+            process.env.STARKNET_PRIVATE_NODE_URL || process.env.APIBARA_URL!;
+          const usePrivateNode = Boolean(process.env.STARKNET_PRIVATE_NODE_URL);
+
+          return createClient(StarknetStream, starknetStreamUrl, {
+            defaultCallOptions: {
+              "*": {
+                metadata: usePrivateNode
+                  ? undefined
+                  : Metadata({
+                      Authorization: `Bearer ${process.env.DNA_TOKEN}`,
+                    }),
+              },
             },
-          },
-        }).streamData({
-          ...streamOptions,
-          filter: [
-            {
-              events: starknetProcessors.map((processor, ix) => ({
-                id: ix + 1,
-                address: processor.filter.fromAddress,
-                keys: processor.filter.keys,
-              })),
-            },
-          ],
-        });
+          }).streamData({
+            ...streamOptions,
+            filter: [
+              {
+                events: starknetProcessors.map((processor, ix) => ({
+                  id: ix + 1,
+                  address: processor.filter.fromAddress,
+                  keys: processor.filter.keys,
+                })),
+              },
+            ],
+          });
+        })();
 
   for await (const message of stream) {
     switch (message._tag) {
@@ -353,26 +361,27 @@ function resetNoBlocksTimer() {
           const blockProcessingStartMs = Date.now();
           let eventsProcessed = 0;
 
-          const blockNumber = Number(block.header.blockNumber);
-          const blockTime = block.header.timestamp;
-          const blockHashHex = block.header.blockHash ?? "0x0";
+          const typedBlock = block as EvmBlock | StarknetBlock;
+          const blockNumber = Number(typedBlock.header.blockNumber);
+          const blockTime = typedBlock.header.timestamp;
+          const blockHashHex = typedBlock.header.blockHash ?? "0x0";
 
           await dao.begin(async (dao) => {
             await dao.deleteOldBlockNumbers(blockNumber);
 
             let baseFeePerGas: bigint | null = null;
 
-            if ("baseFeePerGas" in block.header && block.header.baseFeePerGas) {
-              baseFeePerGas = BigInt(block.header.baseFeePerGas);
+            if ("baseFeePerGas" in typedBlock.header && typedBlock.header.baseFeePerGas) {
+              baseFeePerGas = BigInt(typedBlock.header.baseFeePerGas);
             } else if (
-              "l2GasPrice" in block.header &&
-              block.header.l2GasPrice?.priceInFri
+              "l2GasPrice" in typedBlock.header &&
+              typedBlock.header.l2GasPrice?.priceInFri
             ) {
-              baseFeePerGas = BigInt(block.header.l2GasPrice.priceInFri);
+              baseFeePerGas = BigInt(typedBlock.header.l2GasPrice.priceInFri);
             }
 
             await dao.insertBlock({
-              number: block.header.blockNumber,
+              number: typedBlock.header.blockNumber,
               hash: BigInt(blockHashHex),
               time: blockTime,
               baseFeePerGas,

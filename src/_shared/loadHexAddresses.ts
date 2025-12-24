@@ -5,8 +5,10 @@ export type HexAddress = `0x${string}`;
 type EnvSource = Partial<Record<keyof NodeJS.ProcessEnv, string>> &
   Record<string, string | undefined>;
 
+// Since ProcessEnv is a union type (EvmConfig | StarknetConfig), keyof only gives intersection.
+// We need to accept keys from either type, so we use string and rely on runtime validation.
 export function loadHexAddresses<
-  T extends Record<string, keyof NodeJS.ProcessEnv>
+  T extends Record<string, string>
 >(
   envMap: T,
   env: EnvSource = process.env
