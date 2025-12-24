@@ -16,6 +16,20 @@ import { loadHexAddresses } from "./_shared/loadHexAddresses";
 import { createRpcClient } from "@apibara/protocol/rpc";
 import { createPublicClient, http, webSocket } from "viem";
 
+// Start a simple HTTP server for Cloud Run health checks
+const PORT = parseInt(process.env.PORT || "8080", 10);
+const server = Bun.serve({
+  port: PORT,
+  fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname === "/health" || url.pathname === "/") {
+      return new Response("OK", { status: 200 });
+    }
+    return new Response("Not Found", { status: 404 });
+  },
+});
+logger.info({ message: `Health check server listening on port ${PORT}` });
+
 const NETWORK_TYPE = process.env.NETWORK_TYPE;
 function isNetworkTypeValid(
   networkType: string | undefined
@@ -268,6 +282,13 @@ function resetNoBlocksTimer() {
           const starknetStreamUrl =
             process.env.STARKNET_PRIVATE_NODE_URL || process.env.APIBARA_URL!;
           const usePrivateNode = Boolean(process.env.STARKNET_PRIVATE_NODE_URL);
+
+          logger.info({
+            message: "Connecting to Starknet stream",
+            url: starknetStreamUrl,
+            usePrivateNode,
+            requiresAuth: !usePrivateNode,
+          });
 
           return createClient(StarknetStream, starknetStreamUrl, {
             defaultCallOptions: {
