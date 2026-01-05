@@ -326,15 +326,19 @@ function resetNoBlocksTimer() {
               },
             ],
           })
-      : createClient(StarknetStream, process.env.APIBARA_URL!, {
-          defaultCallOptions: {
-            "*": {
-              metadata: Metadata({
-                Authorization: `Bearer ${process.env.DNA_TOKEN}`,
-              }),
+      : createClient(
+          StarknetStream,
+          process.env.STARKNET_PRIVATE_NODE_URL || process.env.APIBARA_URL!,
+          {
+            defaultCallOptions: {
+              "*": {
+                metadata: Metadata({
+                  Authorization: `Bearer ${process.env.DNA_TOKEN}`,
+                }),
+              },
             },
-          },
-        }).streamData({
+          }
+        ).streamData({
           ...streamOptions,
           filter: [
             {
@@ -346,6 +350,32 @@ function resetNoBlocksTimer() {
             },
           ],
         });
+
+  // Start HTTP health check server for Google Cloud Run
+  const port = parseInt(process.env.PORT || "8080", 10);
+  const server = Bun.serve({
+    port,
+    fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/health") {
+        return new Response(
+          JSON.stringify({
+            status: "ok",
+            network: process.env.NETWORK,
+            networkType: NETWORK_TYPE,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  });
+  logger.info({ message: `Health check server listening on port ${port}` });
 
   for await (const message of stream) {
     switch (message._tag) {
