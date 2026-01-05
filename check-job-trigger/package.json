@@ -1,0 +1,10 @@
+{
+  "name": "check-job-trigger",
+  "version": "1.0.0",
+  "description": "Cloud Function to check if Cloud Run Job is running before triggering",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/run": "^3.0.0"
+  }
+}
+
