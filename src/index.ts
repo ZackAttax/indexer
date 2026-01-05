@@ -40,6 +40,32 @@ if (!chainId) {
 
 const dao = DAO.create(process.env.PG_CONNECTION_STRING!, chainId);
 
+// Start HTTP health check server for Google Cloud Run immediately
+const port = parseInt(process.env.PORT || "8080", 10);
+const server = Bun.serve({
+  port,
+  fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/health") {
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          network: process.env.NETWORK,
+          networkType: NETWORK_TYPE,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
+    return new Response("Not Found", { status: 404 });
+  },
+});
+logger.info({ message: `Health check server listening on port ${port}` });
+
 // Timer for exiting if no blocks are received within the configured time
 const NO_BLOCKS_TIMEOUT_MS = parseInt(process.env.NO_BLOCKS_TIMEOUT_MS || "0");
 let noBlocksTimer: NodeJS.Timeout | null = null;
@@ -350,32 +376,6 @@ function resetNoBlocksTimer() {
             },
           ],
         });
-
-  // Start HTTP health check server for Google Cloud Run
-  const port = parseInt(process.env.PORT || "8080", 10);
-  const server = Bun.serve({
-    port,
-    fetch(request) {
-      const url = new URL(request.url);
-      if (url.pathname === "/health") {
-        return new Response(
-          JSON.stringify({
-            status: "ok",
-            network: process.env.NETWORK,
-            networkType: NETWORK_TYPE,
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          }
-        );
-      }
-      return new Response("Not Found", { status: 404 });
-    },
-  });
-  logger.info({ message: `Health check server listening on port ${port}` });
 
   for await (const message of stream) {
     switch (message._tag) {
