@@ -13,6 +13,8 @@ interface CommonConfiguration {
   NO_BLOCKS_TIMEOUT_MS: string; // Time in milliseconds before exiting if no blocks are received
   EVENT_STATS_BLOCK_INTERVAL?: string; // Number of blocks between ingestion stats logs (default 100)
   TOKEN_PRICE_SYNC_INTERVAL_MS?: string; // Interval for the token price worker (milliseconds)
+  STARKNET_PRIVATE_NODE_URL?: string; // Optional private Starknet node URL, falls back to APIBARA_URL if not set
+  PORT?: string; // Port for HTTP health check server (defaults to 8080)
 }
 
 interface EvmConfig extends CommonConfiguration {
